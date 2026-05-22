@@ -1,0 +1,71 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+env:
+  APP_NAME: "s2s"
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            suffix: linux-x86_64
+            binary_ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            suffix: macos-arm64
+            binary_ext: ""
+          - os: macos-13
+            target: x86_64-apple-darwin
+            suffix: macos-x86_64
+            binary_ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            suffix: windows-x86_64
+            binary_ext: ".exe"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libasound2-dev
+
+      - name: Build Binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Asset (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czvf ../../../${{ env.APP_NAME }}-${{ matrix.suffix }}.tar.gz ${{ env.APP_NAME }}${{ matrix.binary_ext }}
+
+      - name: Package Asset (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path "${{ env.APP_NAME }}${{ matrix.binary_ext }}" -DestinationPath "../../../${{ env.APP_NAME }}-${{ matrix.suffix }}.zip"
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.APP_NAME }}-${{ matrix.suffix }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

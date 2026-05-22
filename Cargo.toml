@@ -1,0 +1,18 @@
+[package]
+name = "s2s"
+version = "0.5.22"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros", "multipart"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sherpa-onnx = "1.13.2"
+clap = { version = "4.4", features = ["derive"] }
+tempfile = "3.8"
+hound = "3.5"
+bytes = "1.5"
+reqwest = { version = "0.11", features = ["blocking"] }
+bzip2 = "0.4"
+tar = "0.4"

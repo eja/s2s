@@ -9,8 +9,8 @@ The project aims to provide a drop-in local alternative for speech processing, f
 - **High Performance:** Built with Rust and ONNX Runtime for efficient CPU/GPU utilization.
 - **Privacy-First:** All processing is done locally on your hardware.
 - **Automated Model Management:** Built-in bootstrap logic to download and configure necessary models (Kokoro and Parakeet) automatically.
-- **Multi-Language Support:** Comprehensive support for English (US/UK), Chinese, Spanish, French, Hindi, Italian, Japanese, and Portuguese.
-- **Flexible TTS:** Integration with the **Kokoro** model, supporting over 50 distinct voices.
+- **Broad STT Language Support:** Supports 25+ languages including English, Spanish, German, French, Russian, and many more.
+- **Flexible TTS:** Integration with the **Kokoro** model, supporting over 50 distinct voices across 9 major languages.
 - **Robust STT:** Powered by the **NVIDIA Parakeet TDT** model for highly accurate transcriptions.
 
 ---
@@ -52,7 +52,7 @@ The server can be customized via command-line arguments:
 ### 1. Speech-to-Text (STT)
 **Endpoint:** `POST /v1/audio/transcriptions`
 
-Transcribe an audio file to text. The endpoint expects a `multipart/form-data` request containing a WAV file.
+Transcribe an audio file to text. The endpoint expects a `multipart/form-data` request containing a WAV file. The model automatically detects the language from the supported list.
 
 **Request:**
 ```bash
@@ -91,9 +91,21 @@ curl http://127.0.0.1:35248/v1/audio/speech \
 
 ---
 
-## Supported Voices and Languages
+## Language & Voice Support
 
-S2S determines the language automatically based on the prefix of the selected voice.
+### Speech-to-Text (STT) Languages
+S2S supports transcription for the following languages:
+
+| | | | | |
+| :--- | :--- | :--- | :--- | :--- |
+| Bulgarian (`bg`) | Croatian (`hr`) | Czech (`cs`) | Danish (`da`) | Dutch (`nl`) |
+| English (`en`) | Estonian (`et`) | Finnish (`fi`) | French (`fr`) | German (`de`) |
+| Greek (`el`) | Hungarian (`hu`) | Italian (`it`) | Latvian (`lv`) | Lithuanian (`lt`) |
+| Maltese (`mt`) | Polish (`pl`) | Portuguese (`pt`) | Romanian (`ro`) | Slovak (`sk`) |
+| Slovenian (`sl`) | Spanish (`es`) | Swedish (`sv`) | Russian (`ru`) | Ukrainian (`uk`) |
+
+### Text-to-Speech (TTS) Voices
+For TTS, the language is determined automatically based on the prefix of the selected voice.
 
 | Language | Voice Prefix | Examples |
 | :--- | :--- | :--- |
@@ -112,7 +124,7 @@ S2S determines the language automatically based on the prefix of the selected vo
 ## Requirements
 
 - **Operating System:** Linux, macOS, or Windows.
-- **Audio Format:** For STT, input must be in **WAV** format.
+- **Audio Format:** For STT, input must be in **WAV** format (16kHz mono recommended).
 - **Disk Space:** Approximately 1.5GB for models and dependencies.
 
 ## Acknowledgments

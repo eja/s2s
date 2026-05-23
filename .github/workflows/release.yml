@@ -17,19 +17,15 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            suffix: linux-x86_64
+            suffix: linux-amd64
             binary_ext: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             suffix: macos-arm64
             binary_ext: ""
-          - os: macos-13
-            target: x86_64-apple-darwin
-            suffix: macos-x86_64
-            binary_ext: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            suffix: windows-x86_64
+            suffix: windows-amd64
             binary_ext: ".exe"
 
     steps:

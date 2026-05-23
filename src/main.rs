@@ -1,9 +1,11 @@
 // Copyright (C) by Ubaldo Porcheddu <ubaldo@eja.it>
 
 use axum::{
-    extract::{Multipart, State},
-    http::StatusCode,
-    response::IntoResponse,
+    body::{Body, HttpBody},
+    extract::{ConnectInfo, Multipart, State},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::post,
     Json, Router,
 };
@@ -16,10 +18,14 @@ use sherpa_onnx::{
 use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Cursor, Write};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::exit;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
+use tracing::info;
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -34,7 +40,9 @@ struct Args {
     #[arg(long, default_value_t = 4)]
     threads: i32,
     #[arg(long)]
-    download: bool,
+    auto: bool,
+    #[arg(long)]
+    log: Option<PathBuf>,
 }
 
 struct AppState {
@@ -43,6 +51,32 @@ struct AppState {
     voice_to_id: HashMap<String, i32>,
     kokoro_path: PathBuf,
     threads: i32,
+}
+
+async fn logger_middleware(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let start = Instant::now();
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let response = next.run(req).await;
+    let latency = start.elapsed();
+    let status = response.status();
+    let size = response.body().size_hint().exact().unwrap_or(0);
+
+    info!(
+        "ip:{} method:{} path:{} status:{} size:{} latency:{:?}",
+        addr.ip(),
+        method,
+        path,
+        status.as_u16(),
+        size,
+        latency
+    );
+
+    response
 }
 
 fn ask_user(model_name: &str) -> bool {
@@ -57,19 +91,19 @@ fn download_and_extract(url: &str, target_dir: &Path, label: &str) -> Result<(),
     let parent = target_dir.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent)?;
     
-    println!("Downloading {}...", label);
+    info!("Downloading {} from {}...", label, url);
     let response = reqwest::blocking::get(url)?;
     if !response.status().is_success() {
         return Err(format!("Failed to download {}: {}", label, response.status()).into());
     }
 
-    println!("Extracting {}...", label);
+    info!("Extracting {}...", label);
     let cursor = Cursor::new(response.bytes()?);
     let bz_decoder = bzip2::read::BzDecoder::new(cursor);
     let mut archive = tar::Archive::new(bz_decoder);
     archive.unpack(parent)?;
     
-    println!("Successfully installed {}", label);
+    info!("Successfully installed {}", label);
     Ok(())
 }
 
@@ -77,10 +111,30 @@ fn download_and_extract(url: &str, target_dir: &Path, label: &str) -> Result<(),
 async fn main() {
     let args = Args::parse();
 
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let stdout_layer = fmt::layer().with_writer(io::stdout);
+    
+    let file_layer = if let Some(log_path) = &args.log {
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_path)
+            .expect("Failed to open log file");
+        Some(fmt::layer().with_ansi(false).with_writer(file))
+    } else {
+        None
+    };
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(stdout_layer)
+        .with(file_layer)
+        .init();
+
     if !args.kokoro.join("model.onnx").exists() {
-        if args.download || ask_user("Kokoro TTS") {
+        if args.auto || ask_user("Kokoro TTS") {
             download_and_extract(
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-multi-lang-v1_0.tar.bz2",
+                "https://github.com/eja/s2s/releases/download/models/kokoro-multi-lang-v1_0.tar.bz2",
                 &args.kokoro,
                 "Kokoro TTS"
             ).expect("Failed to install Kokoro models");
@@ -90,9 +144,9 @@ async fn main() {
     }
 
     if !args.parakeet.join("encoder.int8.onnx").exists() {
-        if args.download || ask_user("Parakeet STT") {
+        if args.auto || ask_user("Parakeet STT") {
             download_and_extract(
-                "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+                "https://github.com/eja/s2s/releases/download/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
                 &args.parakeet,
                 "Parakeet STT"
             ).expect("Failed to install Parakeet models");
@@ -133,12 +187,13 @@ async fn main() {
     let app = Router::new()
         .route("/v1/audio/transcriptions", post(transcribe))
         .route("/v1/audio/speech", post(synthesize))
+        .layer(middleware::from_fn(logger_middleware))
         .with_state(state);
 
     let addr = format!("{}:{}", args.host, args.port);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    println!("Server running on http://{}", addr);
-    axum::serve(listener, app).await.unwrap();
+    info!("Server starting on http://{}", addr);
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
 async fn transcribe(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> impl IntoResponse {

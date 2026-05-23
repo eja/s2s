@@ -27,10 +27,10 @@ Simply run the executable to start the server. On the first run, the application
 ./s2s
 ```
 
-Alternatively, you can skip the prompts by using the `--download` flag:
+Alternatively, you can skip the prompts by using the `--auto` flag:
 
 ```bash
-./s2s --download
+./s2s --auto
 ```
 
 ### Configuration Options
@@ -43,7 +43,7 @@ The server can be customized via command-line arguments:
 | `--kokoro` | Path to the Kokoro TTS model directory | `./models/kokoro...` |
 | `--parakeet` | Path to the Parakeet STT model directory | `./models/sherpa...` |
 | `--threads` | Number of threads for inference | `4` |
-| `--download` | Automatically download missing models | `false` |
+| `--auto` | Automatically download missing models | `false` |
 
 ---
 

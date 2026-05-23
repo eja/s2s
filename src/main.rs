@@ -112,7 +112,7 @@ async fn main() {
     let args = Args::parse();
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let stdout_layer = fmt::layer().with_writer(io::stdout);
+    let stderr_layer = fmt::layer().with_writer(io::stderr);
     
     let file_layer = if let Some(log_path) = &args.log {
         let file = fs::OpenOptions::new()
@@ -127,7 +127,7 @@ async fn main() {
 
     tracing_subscriber::registry()
         .with(filter)
-        .with(stdout_layer)
+        .with(stderr_layer)
         .with(file_layer)
         .init();
 

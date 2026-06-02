@@ -1,18 +1,19 @@
 # S2S
 
-An high-performance, lightweight API server written in Rust that provides local, privacy-conscious Speech-to-Text (STT) and Text-to-Speech (TTS) capabilities. By leveraging the `sherpa-onnx` framework, S2S offers state-of-the-art inference with minimal latency, requiring no external cloud dependencies.
+A high-performance, lightweight API server written in Rust that provides local, privacy-conscious Speech-to-Text (STT) and Text-to-Speech (TTS) capabilities. By leveraging the `sherpa-onnx` framework, S2S offers efficient local inference with minimal latency, requiring no external cloud dependencies.
 
 The project aims to provide a drop-in local alternative for speech processing, featuring an API structure inspired by industry standards.
 
 ## Key Features
 
-- **High Performance:** Built with Rust and ONNX Runtime for efficient CPU/GPU utilization.
-- **Privacy-First:** All processing is done locally on your hardware.
+- **Local Inference:** All processing is done locally on your hardware.
 - **Request Tracing:** Integrated logging providing real-time insights into IP addresses, status codes, and request latency.
-- **Automated Model Management:** Built-in bootstrap logic to download and configure necessary models (Kokoro and Parakeet) automatically.
+- **Automated Model Management:** Built-in bootstrap logic to download necessary models automatically when using the `--auto` flag.
+- **Flexible Service Fallbacks:** The server starts as long as at least one model is present. If only one model is loaded, requests to the missing service will return `404 Not Found`.
+- **OpenAI-Compatible Voice Directory:** Exposes a standard `/v1/audio/voices` list, allowing client integrations to discover voices dynamically.
 - **Broad STT Language Support:** Supports 25+ languages including English, Spanish, German, French, Russian, and many more.
 - **Flexible TTS:** Integration with the **Kokoro** model, supporting over 50 distinct voices across 9 major languages.
-- **Robust STT:** Powered by the **NVIDIA Parakeet TDT** model for highly accurate transcriptions.
+- **Robust STT:** Powered by the **NVIDIA Parakeet TDT** model for accurate transcriptions.
 
 ---
 
@@ -22,13 +23,13 @@ The project aims to provide a drop-in local alternative for speech processing, f
 Download the latest executable for your platform from the [Releases](https://github.com/eja/s2s/releases) page.
 
 ### Running the Server
-Simply run the executable to start the server. On the first run, the application will ask for permission to download the required ONNX models (~1GB total).
+The application requires at least one of the two models to be present locally in order to run. Execute the binary to start the server:
 
 ```bash
 ./s2s
 ```
 
-Alternatively, you can skip the prompts by using the `--auto` flag:
+If neither model is found on your system, the server will inform you and exit. You can instruct the server to automatically download and configure the required ONNX models (~1GB total) by specifying the `--auto` flag:
 
 ```bash
 ./s2s --auto
@@ -50,6 +51,8 @@ The server can be customized via command-line arguments:
 ---
 
 ## API Reference
+
+> **Note:** If the TTS or STT model is missing at startup, the server still launches, but any requests to the missing endpoints will return `404 Not Found`.
 
 ### 1. Speech-to-Text (STT)
 **Endpoint:** `POST /v1/audio/transcriptions`
@@ -73,7 +76,7 @@ curl http://127.0.0.1:35248/v1/audio/transcriptions \
 ### 2. Text-to-Speech (TTS)
 **Endpoint:** `POST /v1/audio/speech`
 
-Synthesize text into high-quality audio.
+Synthesize text into audio.
 
 **Request Body:**
 | Field | Type | Description |
@@ -89,6 +92,26 @@ curl http://127.0.0.1:35248/v1/audio/speech \
     "input": "Hello, I am a locally hosted voice.",
     "voice": "af_bella"
   }' --output output.wav
+```
+
+### 3. Voice Discovery
+**Endpoint:** `GET /v1/audio/voices`
+
+Retrieve the list of available TTS voices sorted alphabetically.
+
+**Request:**
+```bash
+curl http://127.0.0.1:35248/v1/audio/voices
+```
+
+**Response:**
+```json
+{
+  "voices": [
+    { "id": "af_alloy", "name": "af_alloy" },
+    { "id": "af_aoede", "name": "af_aoede" }
+  ]
+}
 ```
 
 ---
@@ -132,5 +155,5 @@ For TTS, the language is determined automatically based on the prefix of the sel
 ## Acknowledgments
 
 - [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) for the underlying inference engine.
-- [Kokoro](https://github.com/hexgrad/Kokoro) for the high-quality TTS weights.
+- [Kokoro](https://github.com/hexgrad/Kokoro) for the TTS weights.
 - [NVIDIA](https://nvidia.com) for the Parakeet TDT ASR models.

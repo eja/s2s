@@ -5,8 +5,8 @@ use axum::{
     extract::{ConnectInfo, Multipart, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
-    routing::post,
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
     Json, Router,
 };
 use clap::Parser;
@@ -17,7 +17,7 @@ use sherpa_onnx::{
 };
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Cursor};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::exit;
@@ -46,11 +46,12 @@ struct Args {
 }
 
 struct AppState {
-    recognizer: OfflineRecognizer,
+    recognizer: Option<OfflineRecognizer>,
     tts_engines: RwLock<HashMap<String, OfflineTts>>,
     voice_to_id: HashMap<String, i32>,
     kokoro_path: PathBuf,
     threads: i32,
+    has_tts: bool,
 }
 
 async fn logger_middleware(
@@ -77,14 +78,6 @@ async fn logger_middleware(
     );
 
     response
-}
-
-fn ask_user(model_name: &str) -> bool {
-    print!("Model '{}' not found. Would you like to download it? (y/N): ", model_name);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_lowercase() == "y"
 }
 
 fn download_and_extract(url: &str, target_dir: &Path, label: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -131,39 +124,58 @@ async fn main() {
         .with(file_layer)
         .init();
 
-    if !args.kokoro.join("model.onnx").exists() {
-        if args.auto || ask_user("Kokoro TTS") {
-            download_and_extract(
-                "https://github.com/eja/s2s/releases/download/models/kokoro-multi-lang-v1_0.tar.bz2",
-                &args.kokoro,
-                "Kokoro TTS"
-            ).expect("Failed to install Kokoro models");
+    let mut has_tts = args.kokoro.join("model.onnx").exists();
+    if !has_tts && args.auto {
+        if let Err(e) = download_and_extract(
+            "https://github.com/eja/s2s/releases/download/models/kokoro-multi-lang-v1_0.tar.bz2",
+            &args.kokoro,
+            "Kokoro TTS"
+        ) {
+            info!("Failed to install Kokoro models: {:?}", e);
         } else {
-            exit(1);
+            has_tts = true;
         }
     }
 
-    if !args.parakeet.join("encoder.int8.onnx").exists() {
-        if args.auto || ask_user("Parakeet STT") {
-            download_and_extract(
-                "https://github.com/eja/s2s/releases/download/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
-                &args.parakeet,
-                "Parakeet STT"
-            ).expect("Failed to install Parakeet models");
+    let mut has_stt = args.parakeet.join("encoder.int8.onnx").exists();
+    if !has_stt && args.auto {
+        if let Err(e) = download_and_extract(
+            "https://github.com/eja/s2s/releases/download/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+            &args.parakeet,
+            "Parakeet STT"
+        ) {
+            info!("Failed to install Parakeet models: {:?}", e);
         } else {
-            exit(1);
+            has_stt = true;
         }
     }
 
-    let mut stt_config = OfflineRecognizerConfig::default();
-    stt_config.model_config.transducer = OfflineTransducerModelConfig {
-        encoder: Some(args.parakeet.join("encoder.int8.onnx").to_string_lossy().into_owned()),
-        decoder: Some(args.parakeet.join("decoder.int8.onnx").to_string_lossy().into_owned()),
-        joiner: Some(args.parakeet.join("joiner.int8.onnx").to_string_lossy().into_owned()),
+    if !has_tts && !has_stt {
+        eprintln!("Error: Neither Kokoro TTS nor Parakeet STT model is available.");
+        eprintln!("Please provide at least one model or use the --auto option to download them.");
+        exit(1);
+    }
+
+    let recognizer = if has_stt {
+        let mut stt_config = OfflineRecognizerConfig::default();
+        stt_config.model_config.transducer = OfflineTransducerModelConfig {
+            encoder: Some(args.parakeet.join("encoder.int8.onnx").to_string_lossy().into_owned()),
+            decoder: Some(args.parakeet.join("decoder.int8.onnx").to_string_lossy().into_owned()),
+            joiner: Some(args.parakeet.join("joiner.int8.onnx").to_string_lossy().into_owned()),
+        };
+        stt_config.model_config.tokens = Some(args.parakeet.join("tokens.txt").to_string_lossy().into_owned());
+        stt_config.model_config.num_threads = args.threads;
+        OfflineRecognizer::create(&stt_config)
+    } else {
+        None
     };
-    stt_config.model_config.tokens = Some(args.parakeet.join("tokens.txt").to_string_lossy().into_owned());
-    stt_config.model_config.num_threads = args.threads;
-    let recognizer = OfflineRecognizer::create(&stt_config).expect("STT init failed");
+
+    let has_stt = recognizer.is_some();
+
+    if !has_tts && !has_stt {
+        eprintln!("Error: Neither Kokoro TTS nor Parakeet STT is available. Exiting.");
+        exit(1);
+    }
 
     let voices = [
         "af_alloy", "af_aoede", "af_bella", "af_heart", "af_jessica", "af_kore", "af_nicole", "af_nova",
@@ -182,9 +194,12 @@ async fn main() {
         voice_to_id,
         kokoro_path: args.kokoro,
         threads: args.threads,
+        has_tts,
     });
 
     let app = Router::new()
+        .route("/", get(landing_page))
+        .route("/v1/audio/voices", get(get_voices))
         .route("/v1/audio/transcriptions", post(transcribe))
         .route("/v1/audio/speech", post(synthesize))
         .layer(middleware::from_fn(logger_middleware))
@@ -196,7 +211,22 @@ async fn main() {
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
 }
 
+async fn get_voices(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut voices: Vec<String> = state.voice_to_id.keys().cloned().collect();
+    voices.sort();
+    let voices_json: Vec<serde_json::Value> = voices
+        .into_iter()
+        .map(|name| serde_json::json!({ "id": name, "name": name }))
+        .collect();
+    Json(serde_json::json!({ "voices": voices_json })).into_response()
+}
+
 async fn transcribe(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> impl IntoResponse {
+    let recognizer = match &state.recognizer {
+        Some(r) => r,
+        None => return (StatusCode::NOT_FOUND, "STT service is not available").into_response(),
+    };
+
     let mut audio_bytes = Vec::new();
     while let Ok(Some(field)) = multipart.next_field().await {
         if field.name() == Some("file") {
@@ -229,9 +259,9 @@ async fn transcribe(State(state): State<Arc<AppState>>, mut multipart: Multipart
         raw_samples
     };
 
-    let stream = state.recognizer.create_stream();
+    let stream = recognizer.create_stream();
     stream.accept_waveform(spec.sample_rate as i32, &samples);
-    state.recognizer.decode(&stream);
+    recognizer.decode(&stream);
     Json(serde_json::json!({ "text": stream.get_result().map(|r| r.text).unwrap_or_default() })).into_response()
 }
 
@@ -242,6 +272,10 @@ struct SpeechRequest {
 }
 
 async fn synthesize(State(state): State<Arc<AppState>>, Json(payload): Json<SpeechRequest>) -> impl IntoResponse {
+    if !state.has_tts {
+        return (StatusCode::NOT_FOUND, "TTS service is not available").into_response();
+    }
+
     let voice_name = payload.voice.unwrap_or_else(|| "af_alloy".to_string());
     let sid = state.voice_to_id.get(&voice_name).cloned().unwrap_or(0);
     
@@ -320,4 +354,105 @@ async fn synthesize(State(state): State<Arc<AppState>>, Json(payload): Json<Spee
         .header("Content-Type", "audio/wav")
         .body(axum::body::Body::from(buf.into_inner()))
         .unwrap()
+}
+
+async fn landing_page() -> Html<&'static str> {
+    Html(r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S2S</title>
+    <style>
+        body { max-width: 600px; margin: 40px auto; padding: 20px; color: #333; }
+        section { background: #f7f7f7; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 1px solid #ddd; }
+        form { display: grid; gap: 10px; }
+        input, select, button { padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; }
+        button { background: #0070f3; color: white; border: none; cursor: pointer; }
+        audio { width: 100%; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <section>
+        <h2>Speech to Text</h2>
+        <form id="asr-form">
+            <input type="file" id="audio-file" accept="audio/wav" required>
+            <button type="submit">Transcribe</button>
+        </form>
+        <div id="asr-result" style="margin-top:10px; word-break:break-all;"></div>
+    </section>
+    <section>
+        <h2>Text to Speech</h2>
+        <form id="tts-form">
+            <input type="text" id="tts-text" value="Hello, welcome to speech services." required>
+            <select id="tts-voice"></select>
+            <button type="submit">Synthesize</button>
+        </form>
+        <audio id="tts-audio" controls style="display:none;"></audio>
+    </section>
+    <script>
+        async function loadVoices() {
+            try {
+                const res = await fetch('/v1/audio/voices');
+                if (!res.ok) throw new Error('Failed to fetch voices');
+                const data = await res.json();
+                const select = document.getElementById('tts-voice');
+                select.innerHTML = '';
+                data.voices.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v.id;
+                    opt.textContent = v.name;
+                    select.appendChild(opt);
+                });
+            } catch (err) {
+                console.error('Error loading voices:', err);
+            }
+        }
+        loadVoices();
+
+        document.getElementById('asr-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('audio-file');
+            if (!fileInput.files.length) return;
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            const resultDiv = document.getElementById('asr-result');
+            resultDiv.textContent = 'Transcribing...';
+            try {
+                const res = await fetch('/v1/audio/transcriptions', { method: 'POST', body: formData });
+                if (!res.ok) {
+                    throw new Error(res.status === 404 ? 'STT service is not available' : 'Transcription failed');
+                }
+                const json = await res.json();
+                resultDiv.textContent = json.text || 'No transcription result.';
+            } catch (err) {
+                resultDiv.textContent = 'Error: ' + err.message;
+            }
+        });
+        document.getElementById('tts-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = document.getElementById('tts-text').value;
+            const voice = document.getElementById('tts-voice').value;
+            const audio = document.getElementById('tts-audio');
+            audio.style.display = 'none';
+            try {
+                const res = await fetch('/v1/audio/speech', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: text, voice })
+                });
+                if (!res.ok) {
+                    throw new Error(res.status === 404 ? 'TTS service is not available' : 'Generation failed');
+                }
+                const blob = await res.blob();
+                audio.src = URL.createObjectURL(blob);
+                audio.style.display = 'block';
+                audio.play();
+            } catch (err) {
+                alert('Error: ' + err.message);
+            }
+        });
+    </script>
+</body>
+</html>"#)
 }

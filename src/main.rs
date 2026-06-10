@@ -33,9 +33,11 @@ struct Args {
     host: String,
     #[arg(long, default_value_t = 35248)]
     port: u16,
-    #[arg(long, default_value = "./models/kokoro-multi-lang-v1_0")]
+    #[arg(long, default_value = "./models")]
+    models: PathBuf,
+    #[arg(long, default_value = "kokoro-multi-lang-v1_0")]
     kokoro: PathBuf,
-    #[arg(long, default_value = "./models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")]
+    #[arg(long, default_value = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8")]
     parakeet: PathBuf,
     #[arg(long, default_value_t = 4)]
     threads: i32,
@@ -124,11 +126,23 @@ async fn main() {
         .with(file_layer)
         .init();
 
-    let mut has_tts = args.kokoro.join("model.onnx").exists();
+    let kokoro_path = if args.kokoro.is_absolute() {
+        args.kokoro.clone()
+    } else {
+        args.models.join(&args.kokoro)
+    };
+
+    let parakeet_path = if args.parakeet.is_absolute() {
+        args.parakeet.clone()
+    } else {
+        args.models.join(&args.parakeet)
+    };
+
+    let mut has_tts = kokoro_path.join("model.onnx").exists();
     if !has_tts && args.auto {
         if let Err(e) = download_and_extract(
             "https://github.com/eja/s2s/releases/download/models/kokoro-multi-lang-v1_0.tar.bz2",
-            &args.kokoro,
+            &kokoro_path,
             "Kokoro TTS"
         ) {
             info!("Failed to install Kokoro models: {:?}", e);
@@ -137,11 +151,11 @@ async fn main() {
         }
     }
 
-    let mut has_stt = args.parakeet.join("encoder.int8.onnx").exists();
+    let mut has_stt = parakeet_path.join("encoder.int8.onnx").exists();
     if !has_stt && args.auto {
         if let Err(e) = download_and_extract(
             "https://github.com/eja/s2s/releases/download/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
-            &args.parakeet,
+            &parakeet_path,
             "Parakeet STT"
         ) {
             info!("Failed to install Parakeet models: {:?}", e);
@@ -159,11 +173,11 @@ async fn main() {
     let recognizer = if has_stt {
         let mut stt_config = OfflineRecognizerConfig::default();
         stt_config.model_config.transducer = OfflineTransducerModelConfig {
-            encoder: Some(args.parakeet.join("encoder.int8.onnx").to_string_lossy().into_owned()),
-            decoder: Some(args.parakeet.join("decoder.int8.onnx").to_string_lossy().into_owned()),
-            joiner: Some(args.parakeet.join("joiner.int8.onnx").to_string_lossy().into_owned()),
+            encoder: Some(parakeet_path.join("encoder.int8.onnx").to_string_lossy().into_owned()),
+            decoder: Some(parakeet_path.join("decoder.int8.onnx").to_string_lossy().into_owned()),
+            joiner: Some(parakeet_path.join("joiner.int8.onnx").to_string_lossy().into_owned()),
         };
-        stt_config.model_config.tokens = Some(args.parakeet.join("tokens.txt").to_string_lossy().into_owned());
+        stt_config.model_config.tokens = Some(parakeet_path.join("tokens.txt").to_string_lossy().into_owned());
         stt_config.model_config.num_threads = args.threads;
         OfflineRecognizer::create(&stt_config)
     } else {
@@ -192,7 +206,7 @@ async fn main() {
         recognizer, 
         tts_engines: RwLock::new(HashMap::new()), 
         voice_to_id,
-        kokoro_path: args.kokoro,
+        kokoro_path,
         threads: args.threads,
         has_tts,
     });
@@ -391,9 +405,16 @@ async fn landing_page() -> Html<&'static str> {
         <audio id="tts-audio" controls style="display:none;"></audio>
     </section>
     <script>
+        function getRelativeUrl(path) {
+            const base = window.location.pathname.endsWith('/') 
+                ? window.location.pathname 
+                : window.location.pathname + '/';
+            return base + path;
+        }
+
         async function loadVoices() {
             try {
-                const res = await fetch('/v1/audio/voices');
+                const res = await fetch(getRelativeUrl('v1/audio/voices'));
                 if (!res.ok) throw new Error('Failed to fetch voices');
                 const data = await res.json();
                 const select = document.getElementById('tts-voice');
@@ -419,7 +440,7 @@ async fn landing_page() -> Html<&'static str> {
             const resultDiv = document.getElementById('asr-result');
             resultDiv.textContent = 'Transcribing...';
             try {
-                const res = await fetch('/v1/audio/transcriptions', { method: 'POST', body: formData });
+                const res = await fetch(getRelativeUrl('v1/audio/transcriptions'), { method: 'POST', body: formData });
                 if (!res.ok) {
                     throw new Error(res.status === 404 ? 'STT service is not available' : 'Transcription failed');
                 }
@@ -436,7 +457,7 @@ async fn landing_page() -> Html<&'static str> {
             const audio = document.getElementById('tts-audio');
             audio.style.display = 'none';
             try {
-                const res = await fetch('/v1/audio/speech', {
+                const res = await fetch(getRelativeUrl('v1/audio/speech'), {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ input: text, voice })

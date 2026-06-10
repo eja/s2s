@@ -1,6 +1,6 @@
 [package]
 name = "s2s"
-version = "0.6.2"
+version = "0.6.10"
 edition = "2021"
 
 [dependencies]
